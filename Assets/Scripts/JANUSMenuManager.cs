@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 /// <summary>
 /// JANUS — Menu Manager
@@ -17,6 +16,11 @@ using TMPro;
 /// ATTACH TO: The JANUS_Menu Canvas GameObject.
 /// Requires: JANUSMenuSetup, JANUSVRInputHandler, JANUSHardwareMonitor
 ///           on the same GameObject.
+///
+/// VISIBILITY: SetVisible hides the menu by disabling the Canvas component
+/// and a CanvasGroup, NOT by disabling the entire GameObject. This keeps
+/// all scripts (including JANUSVRInputHandler) alive so the Menu button
+/// can still be heard when the menu is hidden.
 ///
 /// ── UI HIERARCHY EXPECTED ────────────────────────────────────────────────
 /// JANUS_Menu (Canvas)
@@ -35,12 +39,9 @@ using TMPro;
 ///       Text_HardwareStatus
 ///       Btn_Pause
 ///       Btn_End
-///
-/// You can build this hierarchy manually or use the Unity UI builder.
-/// All references below are optional — the script degrades gracefully
-/// if a field is null (useful during iterative UI development).
 /// </summary>
 [RequireComponent(typeof(Canvas))]
+[RequireComponent(typeof(CanvasGroup))]
 public class JANUSMenuManager : MonoBehaviour
 {
     // ─────────────────────────────────────────────────────────────────────
@@ -48,8 +49,8 @@ public class JANUSMenuManager : MonoBehaviour
     // ─────────────────────────────────────────────────────────────────────
 
     [Header("Patient Info")]
-    [SerializeField] private TextMeshProUGUI patientIDText;
-    [SerializeField] private TextMeshProUGUI sessionCounterText;
+    [SerializeField] private Text patientIDText;
+    [SerializeField] private Text sessionCounterText;
 
     // ─────────────────────────────────────────────────────────────────────
     // Inspector — Floor Plan Cards
@@ -68,8 +69,8 @@ public class JANUSMenuManager : MonoBehaviour
         public Button    CardButton;
         public Image     OutlineImage;
         public GameObject CheckMark;
-        public TextMeshProUGUI NameText;
-        public TextMeshProUGUI DescText;
+        public Text      NameText;
+        public Text      DescText;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -84,7 +85,7 @@ public class JANUSMenuManager : MonoBehaviour
     {
         public Button    RowButton;
         public string    ModuleID;
-        public TextMeshProUGUI LabelText;
+        public Text      LabelText;
         public Image     Background;
     }
 
@@ -95,18 +96,18 @@ public class JANUSMenuManager : MonoBehaviour
     [Header("Session Controls")]
     [SerializeField] private Button pauseButton;
     [SerializeField] private Button endButton;
-    [SerializeField] private TextMeshProUGUI statusText;
+    [SerializeField] private Text statusText;
 
     // ─────────────────────────────────────────────────────────────────────
     // Inspector — Colours (minimalist palette)
     // ─────────────────────────────────────────────────────────────────────
 
     [Header("Colours")]
-    [SerializeField] private Color colSelected    = new Color(0.17f, 0.37f, 0.54f, 1f); // #2C5F8A
-    [SerializeField] private Color colUnselected  = new Color(0.88f, 0.86f, 0.82f, 1f); // #E0DDD9
-    [SerializeField] private Color colHwOK        = new Color(0.24f, 0.48f, 0.35f, 1f); // #3D7A5A
-    [SerializeField] private Color colHwWarn       = new Color(0.60f, 0.42f, 0.16f, 1f); // #9A6B2A
-    [SerializeField] private Color colHwCritical   = new Color(0.72f, 0.18f, 0.18f, 1f); // #B82E2E
+    [SerializeField] private Color colSelected    = new Color(0.17f, 0.37f, 0.54f, 1f);
+    [SerializeField] private Color colUnselected  = new Color(0.88f, 0.86f, 0.82f, 1f);
+    [SerializeField] private Color colHwOK        = new Color(0.24f, 0.48f, 0.35f, 1f);
+    [SerializeField] private Color colHwWarn       = new Color(0.60f, 0.42f, 0.16f, 1f);
+    [SerializeField] private Color colHwCritical   = new Color(0.72f, 0.18f, 0.18f, 1f);
 
     // ─────────────────────────────────────────────────────────────────────
     // Private state
@@ -121,9 +122,11 @@ public class JANUSMenuManager : MonoBehaviour
     private int     _selectedFloor  = 0;
     private string  _selectedModule = "";
     private float   _sessionStart;
+    private bool    _visible        = false;
 
     private JANUSHardwareMonitor _hw;
     private Canvas               _canvas;
+    private CanvasGroup          _canvasGroup;
 
     // ─────────────────────────────────────────────────────────────────────
     // Lifecycle
@@ -131,8 +134,13 @@ public class JANUSMenuManager : MonoBehaviour
 
     private void Awake()
     {
-        _canvas = GetComponent<Canvas>();
-        _hw     = GetComponent<JANUSHardwareMonitor>();
+        _canvas      = GetComponent<Canvas>();
+        _canvasGroup = GetComponent<CanvasGroup>();
+        _hw          = GetComponent<JANUSHardwareMonitor>();
+
+        // Ensure CanvasGroup exists
+        if (_canvasGroup == null)
+            _canvasGroup = gameObject.AddComponent<CanvasGroup>();
     }
 
     private void Start()
@@ -147,6 +155,7 @@ public class JANUSMenuManager : MonoBehaviour
             _hw.OnStatusChanged += OnHardwareStatusChanged;
 
         // Start hidden — shown when clinician presses Menu button
+        // This hides the Canvas but keeps the GameObject ACTIVE
         SetVisible(false);
     }
 
@@ -162,15 +171,13 @@ public class JANUSMenuManager : MonoBehaviour
 
     private void WireButtons()
     {
-        // Floor plan cards
         for (int i = 0; i < floorPlanCards.Length; i++)
         {
-            int idx = i; // capture for lambda
+            int idx = i;
             if (floorPlanCards[i]?.CardButton != null)
                 floorPlanCards[i].CardButton.onClick.AddListener(() => SelectFloor(idx));
         }
 
-        // Module rows
         foreach (var row in moduleRows)
         {
             if (row?.RowButton == null) continue;
@@ -178,7 +185,6 @@ public class JANUSMenuManager : MonoBehaviour
             row.RowButton.onClick.AddListener(() => SelectModule(id));
         }
 
-        // Session controls
         if (pauseButton != null) pauseButton.onClick.AddListener(OnPausePressed);
         if (endButton   != null) endButton.onClick.AddListener(OnEndPressed);
     }
@@ -187,7 +193,6 @@ public class JANUSMenuManager : MonoBehaviour
     // Public API — Patient / Session
     // ─────────────────────────────────────────────────────────────────────
 
-    /// <summary>Load patient data into the menu display.</summary>
     public void LoadPatient(string patientID, int currentSession, int totalSessions)
     {
         _patientID      = patientID;
@@ -229,17 +234,29 @@ public class JANUSMenuManager : MonoBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     // Public API — Visibility
+    //
+    // IMPORTANT: We hide by disabling Canvas + CanvasGroup, NOT by
+    // calling gameObject.SetActive(false). This keeps all scripts
+    // on this GameObject alive (especially JANUSVRInputHandler).
     // ─────────────────────────────────────────────────────────────────────
 
     public void SetVisible(bool visible)
     {
-        gameObject.SetActive(visible);
+        _visible = visible;
+
+        // Disable/enable the Canvas component to stop rendering
+        _canvas.enabled = visible;
+
+        // CanvasGroup controls interaction and visibility
+        _canvasGroup.alpha          = visible ? 1f : 0f;
+        _canvasGroup.interactable   = visible;
+        _canvasGroup.blocksRaycasts = visible;
 
         if (visible) JANUSEvents.OnMenuOpened?.Invoke();
         else         JANUSEvents.OnMenuClosed?.Invoke();
     }
 
-    public void ToggleVisible() => SetVisible(!gameObject.activeSelf);
+    public void ToggleVisible() => SetVisible(!_visible);
 
     /// <summary>
     /// Positions the menu in front of the player's current view.
@@ -329,7 +346,6 @@ public class JANUSMenuManager : MonoBehaviour
             if (card.CheckMark != null)
                 card.CheckMark.SetActive(selected);
 
-            // Populate name/desc from ScriptableObject if available
             if (i < floorPlans.Length && floorPlans[i] != null)
             {
                 if (card.NameText != null) card.NameText.text = floorPlans[i].LayoutName;
@@ -353,7 +369,7 @@ public class JANUSMenuManager : MonoBehaviour
     {
         if (pauseButton != null)
         {
-            var label = pauseButton.GetComponentInChildren<TextMeshProUGUI>();
+            var label = pauseButton.GetComponentInChildren<Text>();
             if (label != null)
             {
                 label.text = _state switch

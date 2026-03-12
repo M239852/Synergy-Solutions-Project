@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.XR;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
 using UnityEngine.XR.Interaction.Toolkit.UI;
 
@@ -10,8 +11,11 @@ using UnityEngine.XR.Interaction.Toolkit.UI;
 ///
 /// Targets: Unity 6000.3.10f1 · XRI 3.3.1 · New Input System 1.18.0
 ///
-/// Uses the same InputActionReferences already configured in the project's
-/// "XRI Default Input Actions.inputactions" asset — no duplicate action maps needed.
+/// ATTACH TO: The JANUS_Menu Canvas GameObject (same as JANUSMenuManager).
+///
+/// This works because JANUSMenuManager.SetVisible no longer disables the
+/// entire GameObject — it only disables the Canvas component and CanvasGroup.
+/// So this script stays alive and can hear the Menu button at all times.
 ///
 /// NAVIGATION:
 ///   NearFarInteractor ray + Trigger  →  click UI elements (handled by XRUIInputModule)
@@ -64,6 +68,11 @@ public class JANUSVRInputHandler : MonoBehaviour
     private GameObject _lastHoveredLeft;
     private GameObject _lastHoveredRight;
 
+    // Cached XR input devices for haptics
+    private UnityEngine.XR.InputDevice _leftDevice;
+    private UnityEngine.XR.InputDevice _rightDevice;
+    private bool _devicesResolved;
+
     // ─────────────────────────────────────────────
     // Lifecycle
     // ─────────────────────────────────────────────
@@ -90,8 +99,29 @@ public class JANUSVRInputHandler : MonoBehaviour
 
     private void Update()
     {
+        if (!_devicesResolved) ResolveDevices();
         HandleHoverHaptics();
         if (gazeEnabled) HandleGazeDwell();
+    }
+
+    // ─────────────────────────────────────────────
+    // Resolve XR Input Devices (for haptics)
+    // ─────────────────────────────────────────────
+
+    private void ResolveDevices()
+    {
+        var devices = new List<UnityEngine.XR.InputDevice>();
+
+        InputDevices.GetDevicesWithCharacteristics(
+            InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller, devices);
+        if (devices.Count > 0) _leftDevice = devices[0];
+
+        devices.Clear();
+        InputDevices.GetDevicesWithCharacteristics(
+            InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller, devices);
+        if (devices.Count > 0) _rightDevice = devices[0];
+
+        _devicesResolved = _leftDevice.isValid && _rightDevice.isValid;
     }
 
     // ─────────────────────────────────────────────
@@ -101,21 +131,23 @@ public class JANUSVRInputHandler : MonoBehaviour
     private void OnMenuToggle(InputAction.CallbackContext ctx)
     {
         _menu.ToggleVisible();
-        TriggerHaptic(rightInteractor, selectAmplitude, selectDuration);
+        _menu.PlaceInFrontOfPlayer();
+        SendHapticToDevice(_rightDevice, selectAmplitude, selectDuration);
+        Debug.Log("[JANUS Input] Menu toggled.");
     }
 
     // ─────────────────────────────────────────────
     // Hover Haptics
     // ─────────────────────────────────────────────
 
-    // XRUIInputModule handles the actual click — we just layer feel on top.
     private void HandleHoverHaptics()
     {
-        CheckHover(rightInteractor, ref _lastHoveredRight);
-        CheckHover(leftInteractor,  ref _lastHoveredLeft);
+        CheckHover(rightInteractor, ref _lastHoveredRight, _rightDevice);
+        CheckHover(leftInteractor,  ref _lastHoveredLeft,  _leftDevice);
     }
 
-    private void CheckHover(NearFarInteractor interactor, ref GameObject last)
+    private void CheckHover(NearFarInteractor interactor, ref GameObject last,
+                            UnityEngine.XR.InputDevice device)
     {
         if (interactor == null) return;
 
@@ -124,7 +156,7 @@ public class JANUSVRInputHandler : MonoBehaviour
             current = result.gameObject;
 
         if (current != null && current != last)
-            TriggerHaptic(interactor, hoverAmplitude, hoverDuration);
+            SendHapticToDevice(device, hoverAmplitude, hoverDuration);
 
         last = current;
     }
@@ -135,7 +167,6 @@ public class JANUSVRInputHandler : MonoBehaviour
 
     private void HandleGazeDwell()
     {
-        // Only activate gaze if no controller is already hovering UI
         if (_lastHoveredLeft != null || _lastHoveredRight != null)
         {
             _gazeTarget = null;
@@ -156,7 +187,7 @@ public class JANUSVRInputHandler : MonoBehaviour
                 if (_gazeTimer >= dwellSeconds)
                 {
                     FireClick(hit.collider.gameObject);
-                    TriggerHaptic(rightInteractor, selectAmplitude, selectDuration);
+                    SendHapticToDevice(_rightDevice, selectAmplitude, selectDuration);
                     _gazeTarget = null;
                     _gazeTimer  = 0f;
                 }
@@ -181,18 +212,20 @@ public class JANUSVRInputHandler : MonoBehaviour
     }
 
     // ─────────────────────────────────────────────
-    // Haptics — XRI 3.3.1 approach
+    // Haptics — XRI 3.3.1 safe approach
     // ─────────────────────────────────────────────
 
-    private void TriggerHaptic(NearFarInteractor interactor, float amplitude, float duration)
+    private void SendHapticToDevice(UnityEngine.XR.InputDevice device, float amplitude, float duration)
     {
-        if (!hapticsEnabled || interactor == null) return;
+        if (!hapticsEnabled || !device.isValid) return;
 
-        // XRI 3.x: haptics via IXRHapticFeedback on the interactor's controller
-        if (interactor.TryGetComponent<UnityEngine.XR.Interaction.Toolkit.XRBaseController>(out var ctrl))
-            ctrl.SendHapticImpulse(amplitude, duration);
+        HapticCapabilities caps;
+        if (device.TryGetHapticCapabilities(out caps) && caps.supportsImpulse)
+        {
+            device.SendHapticImpulse(0u, amplitude, duration);
+        }
     }
 
     public void SelectHaptic(bool left = false)
-        => TriggerHaptic(left ? leftInteractor : rightInteractor, selectAmplitude, selectDuration);
+        => SendHapticToDevice(left ? _leftDevice : _rightDevice, selectAmplitude, selectDuration);
 }

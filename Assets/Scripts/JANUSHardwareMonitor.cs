@@ -64,14 +64,24 @@ public class JANUSHardwareMonitor : MonoBehaviour
         }
 
         // ── Eye tracking ──────────────────────────────────────────────
-        // Quest 3 reports eye tracking via the head device's EyesData feature
-        EyeTrackingCalibrated = true; // Default true; refined below if supported
+        EyeTrackingCalibrated = true;
         if (hmds.Count > 0 && hmds[0].TryGetFeatureValue(CommonUsages.isTracked, out bool tracked))
             EyeTrackingCalibrated = tracked;
 
         // ── Controllers ───────────────────────────────────────────────
-        CheckController(InputDeviceCharacteristics.Left,  ref LeftBattery,  out LeftControllerOk);
-        CheckController(InputDeviceCharacteristics.Right, ref RightBattery, out RightControllerOk);
+        // Properties cannot be passed as ref/out in C#.
+        // Use local variables, then assign back to the properties.
+        float leftBat  = LeftBattery;
+        float rightBat = RightBattery;
+        bool  leftOk, rightOk;
+
+        CheckController(InputDeviceCharacteristics.Left,  ref leftBat,  out leftOk);
+        CheckController(InputDeviceCharacteristics.Right, ref rightBat, out rightOk);
+
+        LeftBattery       = leftBat;
+        RightBattery      = rightBat;
+        LeftControllerOk  = leftOk;
+        RightControllerOk = rightOk;
 
         // ── Overall status ────────────────────────────────────────────
         float lowest = Mathf.Min(LeftBattery, RightBattery);
